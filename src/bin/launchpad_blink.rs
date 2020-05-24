@@ -61,16 +61,19 @@ pub extern "C" fn stellaris_main() {
     let usb0 = tm4c123x::USB0::ptr();
     unsafe {
         (*sysctl).rcgcusb.modify(|_r, w| w.r0().set_bit());
-        (*sysctl).rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
-        (*usb0).power.modify(|_r, w| w.softconn().set_bit());
         (*sysctl).rcgcgpio.modify(|_r, w| w.r3().set_bit());
-        let gpiod_den = (*gpiod).den.read().bits();
-        writeln!(uart, "got some bits").unwrap();
-        writeln!(uart, "gpioden is 0x{:08x}", gpiod_den).unwrap();
+        (*sysctl).rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
+        cortex_m::asm::delay(3); // let the clocks warm up
 
+        // these bits are grey in the manual but I had a hunch I still needed to set them to make
+        // the "analog" USB function work
+        (*gpiod).amsel.modify(|r, w| w.bits(r.bits() | 0x30));
+        (*usb0).power.modify(|_r, w| w.softconn().set_bit());
+
+        writeln!(uart, "I did the thing").unwrap();
         // *(0x4005_041c)
 
-        loop{}
+        loop {}
     }
 
     gpio::PinPort::PortF(gpio::Pin::Pin2).set_direction(gpio::PinMode::Peripheral);
