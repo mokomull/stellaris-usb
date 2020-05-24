@@ -71,6 +71,11 @@ pub extern "C" fn stellaris_main() {
         (*usb0).power.modify(|_r, w| w.softconn().set_bit());
 
         writeln!(uart, "I did the thing").unwrap();
+
+        while !(*usb0).csrl0.read().setend().bit() {
+        }
+
+        writeln!(uart, "I got a control packet!").unwrap();
         // *(0x4005_041c)
 
         loop {}
