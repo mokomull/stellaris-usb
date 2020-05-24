@@ -76,6 +76,17 @@ pub extern "C" fn stellaris_main() {
         }
 
         writeln!(uart, "I got a control packet!").unwrap();
+
+        let count = (*usb0).count0.read().count().bits();
+        writeln!(uart, "It is {} bytes", count);
+
+        for _ in 0..count {
+            let addr = &(*usb0).fifo0 as *const _ as *const u8;
+            let byte = core::ptr::read_volatile(addr);
+            write!(uart, "{:02x} ", byte);
+        }
+        writeln!(uart).unwrap();
+        writeln!(uart, "done").unwrap();
         // *(0x4005_041c)
 
         loop {}
