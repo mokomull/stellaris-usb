@@ -6,3 +6,5 @@ edition = "2018"
 description = "A USB device implementation using the EK-LM4F120XL LaunchPad"
 
 [dependencies]
+embedded-hal = "0.2"
+stellaris-launchpad = { path = "../stellaris-launchpad" }
