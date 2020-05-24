@@ -55,6 +55,24 @@ pub extern "C" fn stellaris_main() {
     let mut ticks_last = systick::SYSTICK_MAX;
     let mut t = timer::Timer::new(timer::TimerId::Timer1A);
     t.enable_pwm(4096);
+
+    let sysctl = tm4c123x::SYSCTL::ptr();
+    let gpiod = tm4c123x::GPIO_PORTD::ptr();
+    let usb0 = tm4c123x::USB0::ptr();
+    unsafe {
+        (*sysctl).rcgcusb.modify(|_r, w| w.r0().set_bit());
+        (*sysctl).rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
+        (*usb0).power.modify(|_r, w| w.softconn().set_bit());
+        (*sysctl).rcgcgpio.modify(|_r, w| w.r3().set_bit());
+        let gpiod_den = (*gpiod).den.read().bits();
+        writeln!(uart, "got some bits").unwrap();
+        writeln!(uart, "gpioden is 0x{:08x}", gpiod_den).unwrap();
+
+        // *(0x4005_041c)
+
+        loop{}
+    }
+
     gpio::PinPort::PortF(gpio::Pin::Pin2).set_direction(gpio::PinMode::Peripheral);
     gpio::PinPort::PortF(gpio::Pin::Pin2).enable_ccp();
     let levels = [1u32, 256, 512, 1024, 2048, 4096];
