@@ -1,0 +1,8 @@
+[package]
+name = "stellaris-usb"
+version = "0.1.0"
+authors = ["Matt Mullins <mmullins@mmlx.us>"]
+edition = "2018"
+description = "A USB device implementation using the EK-LM4F120XL LaunchPad"
+
+[dependencies]
