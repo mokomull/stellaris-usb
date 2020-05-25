@@ -55,6 +55,45 @@ pub extern "C" fn stellaris_main() {
     let mut ticks_last = systick::SYSTICK_MAX;
     let mut t = timer::Timer::new(timer::TimerId::Timer1A);
     t.enable_pwm(4096);
+
+    let sysctl = tm4c123x::SYSCTL::ptr();
+    let gpiod = tm4c123x::GPIO_PORTD::ptr();
+    let usb0 = tm4c123x::USB0::ptr();
+    unsafe {
+        (*sysctl).rcgcusb.modify(|_r, w| w.r0().set_bit());
+        (*sysctl).rcgcgpio.modify(|_r, w| w.r3().set_bit());
+        (*sysctl).rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
+        cortex_m::asm::delay(3); // let the clocks warm up
+
+        // these bits are grey in the manual but I had a hunch I still needed to set them to make
+        // the "analog" USB function work
+        (*gpiod).amsel.modify(|r, w| w.bits(r.bits() | 0x30));
+        (*usb0).power.modify(|_r, w| w.softconn().set_bit());
+
+        writeln!(uart, "I did the thing").unwrap();
+
+        loop {
+            while !(*usb0).csrl0.read().setend().bit() {}
+
+            writeln!(uart, "I got a control packet!").unwrap();
+
+            let count = (*usb0).count0.read().count().bits();
+            writeln!(uart, "It is {} bytes", count);
+
+            for _ in 0..count {
+                let addr = &(*usb0).fifo0 as *const _ as *const u8;
+                let byte = core::ptr::read_volatile(addr);
+                write!(uart, "{:02x} ", byte);
+            }
+            writeln!(uart).unwrap();
+            writeln!(uart, "done").unwrap();
+
+            (*usb0).csrl0.modify(|_r, w| w.setendc().set_bit());
+        }
+
+        loop {}
+    }
+
     gpio::PinPort::PortF(gpio::Pin::Pin2).set_direction(gpio::PinMode::Peripheral);
     gpio::PinPort::PortF(gpio::Pin::Pin2).enable_ccp();
     let levels = [1u32, 256, 512, 1024, 2048, 4096];
