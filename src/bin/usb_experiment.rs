@@ -83,7 +83,10 @@ pub extern "C" fn stellaris_main() {
             writeln!(uart).unwrap();
             writeln!(uart, "done").unwrap();
 
-            (*usb0).csrl0.modify(|_r, w| w.setendc().set_bit());
+            (*usb0).csrl0.modify(|_r, w| {
+                w.setendc().set_bit();
+                w.stall().set_bit()
+            });
         }
     }
 }
