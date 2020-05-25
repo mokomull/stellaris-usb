@@ -16,6 +16,7 @@ extern crate stellaris_launchpad;
 
 use core::fmt::Write;
 use stellaris_launchpad::cpu::uart;
+use tm4c123x::interrupt;
 
 // ****************************************************************************
 //
@@ -46,6 +47,11 @@ use stellaris_launchpad::cpu::uart;
 // Public Functions
 //
 // ****************************************************************************
+
+#[interrupt]
+unsafe fn USB0() {
+    stellaris_launchpad::board::led_on(stellaris_launchpad::board::Led::Green);
+}
 
 #[no_mangle]
 pub extern "C" fn stellaris_main() {
@@ -87,6 +93,8 @@ pub extern "C" fn stellaris_main() {
                 w.setendc().set_bit();
                 w.stall().set_bit()
             });
+            (*usb0).is.read();
+            (*usb0).ie.modify(|_r, w| w.reset().set_bit());
         }
     }
 }

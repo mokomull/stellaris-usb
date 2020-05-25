@@ -9,4 +9,5 @@ description = "A USB device implementation using the EK-LM4F120XL LaunchPad"
 embedded-hal = "0.2"
 stellaris-launchpad = { path = "../stellaris-launchpad" }
 cortex-m = "0.6"
-tm4c123x = { path = "../dslite2svd/crates/tm4c123x" }
+cortex-m-rt = "0.6"
+tm4c123x = { path = "../dslite2svd/crates/tm4c123x", features = [ "rt" ] }
