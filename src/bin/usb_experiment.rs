@@ -60,6 +60,7 @@ pub extern "C" fn stellaris_main() {
     let sysctl = tm4c123x::SYSCTL::ptr();
     let gpiod = tm4c123x::GPIO_PORTD::ptr();
     let usb0 = tm4c123x::USB0::ptr();
+    let nvic = tm4c123x::NVIC::ptr();
     unsafe {
         (*sysctl).rcgcusb.modify(|_r, w| w.r0().set_bit());
         (*sysctl).rcgcgpio.modify(|_r, w| w.r3().set_bit());
@@ -70,6 +71,9 @@ pub extern "C" fn stellaris_main() {
         // the "analog" USB function work
         (*gpiod).amsel.modify(|r, w| w.bits(r.bits() | 0x30));
         (*usb0).power.modify(|_r, w| w.softconn().set_bit());
+
+
+        (*nvic).iser[1].modify(|d| d | (1 << (44 - 32)));
 
         writeln!(uart, "I did the thing").unwrap();
 
