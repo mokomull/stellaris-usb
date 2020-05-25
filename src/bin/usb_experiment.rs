@@ -15,8 +15,7 @@ extern crate embedded_hal;
 extern crate stellaris_launchpad;
 
 use core::fmt::Write;
-use stellaris_launchpad::cpu::{gpio, systick, timer, uart};
-use embedded_hal::serial::Read as ReadHal;
+use stellaris_launchpad::cpu::uart;
 
 // ****************************************************************************
 //
@@ -51,10 +50,6 @@ use embedded_hal::serial::Read as ReadHal;
 #[no_mangle]
 pub extern "C" fn stellaris_main() {
     let mut uart = uart::Uart::new(uart::UartId::Uart0, 115200, uart::NewlineMode::SwapLFtoCRLF);
-    let mut loops = 0;
-    let mut ticks_last = systick::SYSTICK_MAX;
-    let mut t = timer::Timer::new(timer::TimerId::Timer1A);
-    t.enable_pwm(4096);
 
     let sysctl = tm4c123x::SYSCTL::ptr();
     let gpiod = tm4c123x::GPIO_PORTD::ptr();
@@ -78,44 +73,17 @@ pub extern "C" fn stellaris_main() {
             writeln!(uart, "I got a control packet!").unwrap();
 
             let count = (*usb0).count0.read().count().bits();
-            writeln!(uart, "It is {} bytes", count);
+            writeln!(uart, "It is {} bytes", count).unwrap();
 
             for _ in 0..count {
                 let addr = &(*usb0).fifo0 as *const _ as *const u8;
                 let byte = core::ptr::read_volatile(addr);
-                write!(uart, "{:02x} ", byte);
+                write!(uart, "{:02x} ", byte).unwrap();
             }
             writeln!(uart).unwrap();
             writeln!(uart, "done").unwrap();
 
             (*usb0).csrl0.modify(|_r, w| w.setendc().set_bit());
-        }
-
-        loop {}
-    }
-
-    gpio::PinPort::PortF(gpio::Pin::Pin2).set_direction(gpio::PinMode::Peripheral);
-    gpio::PinPort::PortF(gpio::Pin::Pin2).enable_ccp();
-    let levels = [1u32, 256, 512, 1024, 2048, 4096];
-    uart.write_all("Welcome to Launchpad Blink\n");
-    loop {
-        for level in levels.iter() {
-            t.set_pwm(*level);
-            let delta = systick::get_since(ticks_last);
-            ticks_last = systick::get_ticks();
-            writeln!(
-                uart,
-                "Hello, world! Loops = {}, elapsed = {}, run_time = {}, level = {}",
-                loops,
-                systick::ticks_to_usecs(delta),
-                systick::run_time_us() as u32,
-                level
-            ).unwrap();
-            while let Ok(ch) = uart.read() {
-                writeln!(uart, "byte read {}", ch).unwrap();
-            }
-            loops = loops + 1;
-            stellaris_launchpad::delay(250);
         }
     }
 }
