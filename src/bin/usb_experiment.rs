@@ -13,9 +13,12 @@
 
 use core::fmt::Write;
 use embedded_hal::digital::v2::OutputPin;
-use stellaris_launchpad::cpu::time::Bps;
+use stellaris_launchpad::cpu::gpio::{
+    gpiof::{PF1, PF3},
+    GpioExt, Output, PushPull,
+};
 use stellaris_launchpad::cpu::serial;
-use stellaris_launchpad::cpu::gpio::{GpioExt, Output, {gpiof::PF3}, PushPull};
+use stellaris_launchpad::cpu::time::Bps;
 use tm4c123x::interrupt;
 
 // ****************************************************************************
@@ -47,11 +50,19 @@ use tm4c123x::interrupt;
 // Public Functions
 //
 // ****************************************************************************
+static mut RED_LED: *mut PF1<Output<PushPull>> = 0 as *mut _;
 static mut GREEN_LED: *mut PF3<Output<PushPull>> = 0 as *mut _;
 
 #[interrupt]
 unsafe fn USB0() {
-    (&mut *GREEN_LED).set_high().unwrap();
+    let usb0 = tm4c123x::USB0::ptr();
+    if (*usb0).is.read().bits() & 0x4 != 0 {
+        (&mut *RED_LED).set_high().unwrap();
+    } else if (*usb0).txis.read().bits() & 0x4 != 0 {
+        (&mut *RED_LED).set_low().unwrap();
+    } else {
+        (&mut *GREEN_LED).set_high().unwrap();
+    }
 }
 
 #[no_mangle]
@@ -71,6 +82,7 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
 
     unsafe {
         GREEN_LED = &mut board.led_green;
+        RED_LED = &mut board.led_red;
     }
 
     let sysctl = tm4c123x::SYSCTL::ptr();
@@ -87,7 +99,6 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
         // the "analog" USB function work
         (*gpiod).amsel.modify(|r, w| w.bits(r.bits() | 0x30));
         (*usb0).power.modify(|_r, w| w.softconn().set_bit());
-
 
         (*nvic).iser[1].modify(|d| d | (1 << (44 - 32)));
 
