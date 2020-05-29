@@ -14,12 +14,14 @@
 use core::fmt::Write;
 use embedded_hal::digital::v2::OutputPin;
 use stellaris_launchpad::cpu::gpio::{
+    gpioa::{PA0, PA1},
     gpiof::{PF1, PF3},
-    GpioExt, Output, PushPull,
+    AlternateFunction, GpioExt, Output, PushPull, AF1,
 };
 use stellaris_launchpad::cpu::serial;
 use stellaris_launchpad::cpu::time::Bps;
 use tm4c123x::interrupt;
+use tm4c123x::UART0;
 
 // ****************************************************************************
 //
@@ -50,18 +52,42 @@ use tm4c123x::interrupt;
 // Public Functions
 //
 // ****************************************************************************
+static mut UART: *mut serial::Serial<
+    UART0,
+    PA1<AlternateFunction<AF1, PushPull>>,
+    PA0<AlternateFunction<AF1, PushPull>>,
+    (),
+    (),
+> = 0 as *mut _;
 static mut RED_LED: *mut PF1<Output<PushPull>> = 0 as *mut _;
 static mut GREEN_LED: *mut PF3<Output<PushPull>> = 0 as *mut _;
 
 #[interrupt]
 unsafe fn USB0() {
-    let usb0 = tm4c123x::USB0::ptr();
-    if (*usb0).is.read().bits() & 0x4 != 0 {
-        (&mut *RED_LED).set_high().unwrap();
-    } else if (*usb0).txis.read().bits() & 0x4 != 0 {
-        (&mut *RED_LED).set_low().unwrap();
-    } else {
-        (&mut *GREEN_LED).set_high().unwrap();
+    let usb0 = &*tm4c123x::USB0::ptr();
+    let uart = &mut *UART;
+
+    let is = usb0.is.read().bits();
+    let rxis = usb0.rxis.read().bits();
+    let txis = usb0.txis.read().bits();
+    writeln!(
+        uart,
+        "is: 0x{:02x}, rxis: 0x{:04x}, txis: 0x{:04x}",
+        is, rxis, txis
+    )
+    .unwrap();
+
+    if txis & 0x1 != 0 {
+        let csrl0 = usb0.csrl0.read().bits();
+        writeln!(uart, "csrl0: 0x{:0x}", csrl0).unwrap();
+    }
+
+    writeln!(uart).unwrap();
+
+    match () {
+        () if is & 0x4 != 0 => (&mut *RED_LED).set_high().unwrap(),
+        () if txis & 0x1 != 0 => (&mut *RED_LED).set_low().unwrap(),
+        _ => (&mut *GREEN_LED).set_high().unwrap(),
     }
 }
 
@@ -81,6 +107,7 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
     );
 
     unsafe {
+        UART = &mut uart;
         GREEN_LED = &mut board.led_green;
         RED_LED = &mut board.led_red;
     }
@@ -105,9 +132,9 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
         writeln!(uart, "I did the thing").unwrap();
 
         loop {
-            while !(*usb0).csrl0.read().setend().bit() {}
+            while !(*usb0).csrl0.read().rxrdy().bit() {}
 
-            writeln!(uart, "I got a control packet!").unwrap();
+            writeln!(uart, "I got a packet!").unwrap();
 
             let count = (*usb0).count0.read().count().bits();
             writeln!(uart, "It is {} bytes", count).unwrap();
@@ -120,12 +147,11 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
             writeln!(uart).unwrap();
             writeln!(uart, "done").unwrap();
 
-            (*usb0).csrl0.modify(|_r, w| {
-                w.setendc().set_bit();
-                w.stall().set_bit()
-            });
-            (*usb0).is.read();
-            (*usb0).ie.modify(|_r, w| w.reset().set_bit());
+            if (*usb0).csrl0.read().setend().bit() {
+                writeln!(uart, "and a setup stage has concluded").unwrap();
+            }
+
+            (*usb0).csrl0.modify(|_r, w| w.rxrdyc().set_bit());
         }
     }
 }
