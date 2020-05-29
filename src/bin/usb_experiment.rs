@@ -113,9 +113,15 @@ unsafe fn USB0() {
         is, rxis, txis
     )
     .unwrap();
+    writeln!(uart, "address is currently {}", (*usb0).faddr.read().bits()).unwrap();
 
     if txis & 0x1 != 0 {
         do_endpoint_0(usb0, uart);
+    }
+
+    if is & 0x40 != 0 {
+        // reset
+        (*usb0).faddr.write(|w| w.bits(0));
     }
 
     writeln!(uart).unwrap();
@@ -176,14 +182,30 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
             (0x0, 5, addr, 0, 0) => {
                 // I think setting TXRDY is going to send a zero-byte IN in response, which will
                 // conclude the transaction.
+
                 usb.csrl0.modify(|_r, w| {
                     w.rxrdyc().set_bit();
                     w.dataend().set_bit();
                     w.txrdy().set_bit()
                 });
                 // wait for the packet to be sent
+                writeln!(uart, "waiting...").unwrap();
                 while usb.csrl0.read().txrdy().bit() {}
                 usb.faddr.write(|w| w.faddr().bits(addr as u8));
+                writeln!(
+                    uart,
+                    "set address to {}, csrl0 is now 0x{:x}",
+                    addr,
+                    usb.csrl0.read().bits()
+                )
+                .unwrap();
+
+                while usb.faddr.read().bits() != addr as u8 {
+                    writeln!(uart, "boop").unwrap();
+                    usb.faddr.write(|w| w.bits(addr as u8));
+                }
+
+                writeln!(uart, "address reg is now {}", usb.faddr.read().bits()).unwrap();
             }
             x => {
                 writeln!(uart, "Unknown request: {:x?}", x).unwrap();
