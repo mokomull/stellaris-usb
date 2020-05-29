@@ -173,6 +173,18 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
                     w.txrdy().set_bit()
                 });
             }
+            (0x0, 5, addr, 0, 0) => {
+                // I think setting TXRDY is going to send a zero-byte IN in response, which will
+                // conclude the transaction.
+                usb.csrl0.modify(|_r, w| {
+                    w.rxrdyc().set_bit();
+                    w.dataend().set_bit();
+                    w.txrdy().set_bit()
+                });
+                // wait for the packet to be sent
+                while usb.csrl0.read().txrdy().bit() {}
+                usb.faddr.write(|w| w.faddr().bits(addr as u8));
+            }
             x => {
                 writeln!(uart, "Unknown request: {:x?}", x).unwrap();
             }
