@@ -210,6 +210,12 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
                     w.txrdy().set_bit()
                 });
             }
+            // Get Descriptor, type 6 = Device_Qualifier
+            (0x80, 6, 0x0600, 0, _length) => {
+                usb.csrl0.modify(|_r, w| w.rxrdyc().set_bit());
+                // we don't have any high-speed capabilities, so fail the request
+                usb.csrl0.modify(|_r, w| w.stall().set_bit());
+            }
             (0x0, 5, addr, 0, 0) => {
                 // I think setting DATAEND is going to make the hardware send a zero-byte DATA1
                 // response to the status stage IN on our behalf, which will conclude the
@@ -225,6 +231,12 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
                 writeln!(uart, "Unknown request: {:x?}", x).unwrap();
             }
         }
+    }
+
+    if csrl0.stalled().bit() {
+        // "Software must clear this bit", I suppose we get interrupted with this set when the
+        // hardware finally does respond to our STALL request.
+        usb.csrl0.modify(|_r, w| w.stalled().clear_bit());
     }
 }
 
