@@ -178,6 +178,7 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
 
         match (bmRequestType, bRequest, wValue, wIndex, wLength) {
             (0x80, 6, 0x0100, 0, length) => {
+                usb.csrl0.modify(|_r, w| w.rxrdyc().set_bit());
                 let fifo = &usb.fifo0 as *const _ as *mut u8;
                 for i in core::slice::from_raw_parts(
                     &DEVICE as *const _ as *const u8,
@@ -186,23 +187,22 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
                     core::ptr::write_volatile(fifo, *i);
                 }
                 usb.csrl0.modify(|_r, w| {
-                    w.rxrdyc().set_bit();
                     w.dataend().set_bit();
                     w.txrdy().set_bit()
                 });
             }
             (0x0, 5, addr, 0, 0) => {
-                // I think setting TXRDY is going to send a zero-byte IN in response, which will
-                // conclude the transaction.
+                // I think setting DATAEND is going to make the hardware send a zero-byte DATA1
+                // response to the status stage IN on our behalf, which will conclude the
+                // transaction.
 
                 usb.csrl0.modify(|_r, w| {
                     w.rxrdyc().set_bit();
-                    w.dataend().set_bit();
-                    w.txrdy().set_bit()
+                    w.dataend().set_bit()
                 });
                 // wait for the packet to be sent
                 writeln!(uart, "waiting...").unwrap();
-                while usb.csrl0.read().txrdy().bit() {}
+                while usb.csrl0.read().dataend().bit() {}
                 usb.faddr.write(|w| w.faddr().bits(addr as u8));
                 writeln!(
                     uart,
