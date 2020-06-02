@@ -98,11 +98,15 @@ type Uart = serial::Serial<
 static mut UART: *mut Uart = 0 as *mut _;
 static mut RED_LED: *mut PF1<Output<PushPull>> = 0 as *mut _;
 static mut GREEN_LED: *mut PF3<Output<PushPull>> = 0 as *mut _;
+static mut TIMER: *mut tm4c123x::WTIMER0 = 0 as *mut _;
 
 #[interrupt]
 unsafe fn USB0() {
     let usb0 = &*tm4c123x::USB0::ptr();
     let uart = &mut *UART;
+    let timer = &mut *TIMER;
+
+    let start = timer.tar.read().bits();
 
     let is = usb0.is.read().bits();
     let rxis = usb0.rxis.read().bits();
@@ -131,6 +135,14 @@ unsafe fn USB0() {
         () if txis & 0x1 != 0 => (&mut *RED_LED).set_low().unwrap(),
         _ => (&mut *GREEN_LED).set_high().unwrap(),
     }
+
+    let end = timer.tar.read().bits();
+    writeln!(
+        uart,
+        "It took {} clocks to run the interrupt\n\n",
+        end - start
+    )
+    .unwrap();
 }
 
 #[allow(non_snake_case)]
@@ -233,6 +245,22 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
         UART = &mut uart;
         GREEN_LED = &mut board.led_green;
         RED_LED = &mut board.led_red;
+    }
+
+    stellaris_launchpad::cpu::sysctl::control_power(
+        &board.power_control,
+        stellaris_launchpad::cpu::sysctl::Domain::WideTimer0,
+        stellaris_launchpad::cpu::sysctl::RunMode::Run,
+        stellaris_launchpad::cpu::sysctl::PowerState::On,
+    );
+    board.WTIMER0.cfg.write(|w| unsafe { w.cfg().bits(4) });
+    board.WTIMER0.tamr.write(|w| {
+        w.tacdir().set_bit();
+        unsafe { w.tamr().bits(2) }
+    });
+    board.WTIMER0.ctl.write(|w| w.taen().set_bit());
+    unsafe {
+        TIMER = &mut board.WTIMER0;
     }
 
     let sysctl = tm4c123x::SYSCTL::ptr();
