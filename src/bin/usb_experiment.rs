@@ -100,6 +100,12 @@ static mut RED_LED: *mut PF1<Output<PushPull>> = 0 as *mut _;
 static mut GREEN_LED: *mut PF3<Output<PushPull>> = 0 as *mut _;
 static mut TIMER: *mut tm4c123x::WTIMER0 = 0 as *mut _;
 
+enum UsbSetupState {
+    Normal,
+    PendingSetAddress(u8),
+}
+static mut STATE: UsbSetupState = UsbSetupState::Normal;
+
 #[interrupt]
 unsafe fn USB0() {
     let usb0 = &*tm4c123x::USB0::ptr();
@@ -126,6 +132,7 @@ unsafe fn USB0() {
     if is & 0x40 != 0 {
         // reset
         (*usb0).faddr.write(|w| w.bits(0));
+        STATE = UsbSetupState::Normal;
     }
 
     writeln!(uart).unwrap();
@@ -149,6 +156,18 @@ unsafe fn USB0() {
 unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
     let csrl0 = usb.csrl0.read();
     writeln!(uart, "csrl0: 0x{:0x}", csrl0.bits()).unwrap();
+
+    if let UsbSetupState::PendingSetAddress(addr) = STATE {
+        if !csrl0.dataend().bit() {
+            // Now we know that hardware has completed the Status Stage of the Set Address command,
+            // because we had set this bit when we put PendingAddress into STATE.  The hardware
+            // dutifully sends us an interrupt with ALL of the status bits cleared when this
+            // happens.
+            writeln!(uart, "setting address to {}", addr).unwrap();
+            usb.faddr.write(|w| w.faddr().bits(addr as u8));
+            STATE = UsbSetupState::Normal;
+        }
+    }
 
     if csrl0.rxrdy().bit() {
         writeln!(uart, "I got a packet!").unwrap();
@@ -200,24 +219,7 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
                     w.rxrdyc().set_bit();
                     w.dataend().set_bit()
                 });
-                // wait for the packet to be sent
-                writeln!(uart, "waiting...").unwrap();
-                while usb.csrl0.read().dataend().bit() {}
-                usb.faddr.write(|w| w.faddr().bits(addr as u8));
-                writeln!(
-                    uart,
-                    "set address to {}, csrl0 is now 0x{:x}",
-                    addr,
-                    usb.csrl0.read().bits()
-                )
-                .unwrap();
-
-                while usb.faddr.read().bits() != addr as u8 {
-                    writeln!(uart, "boop").unwrap();
-                    usb.faddr.write(|w| w.bits(addr as u8));
-                }
-
-                writeln!(uart, "address reg is now {}", usb.faddr.read().bits()).unwrap();
+                STATE = UsbSetupState::PendingSetAddress(addr as u8);
             }
             x => {
                 writeln!(uart, "Unknown request: {:x?}", x).unwrap();
