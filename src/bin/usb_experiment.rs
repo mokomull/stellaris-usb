@@ -285,6 +285,13 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
                 });
                 STATE = UsbSetupState::PendingSetAddress(addr as u8);
             }
+            (0, 9 /* SET_CONFIGURATION */, 1, 0, 0) => {
+                // blindly accept the configuration
+                usb.csrl0.modify(|_r, w| {
+                    w.dataend().set_bit();
+                    w.rxrdyc().set_bit()
+                })
+            }
             x => {
                 writeln!(uart, "Unknown request: {:x?}", x).unwrap();
             }
