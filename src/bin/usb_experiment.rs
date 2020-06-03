@@ -196,25 +196,23 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
         let wLength = u16::from_le_bytes(packet[6..8].try_into().unwrap());
 
         match (bmRequestType, bRequest, wValue, wIndex, wLength) {
-            (0x80, 6, 0x0100, 0, length) => {
+            (0x80, 6, descriptor, 0, length) => {
                 usb.csrl0.modify(|_r, w| w.rxrdyc().set_bit());
-                let fifo = &usb.fifo0 as *const _ as *mut u8;
-                for i in core::slice::from_raw_parts(
-                    &DEVICE as *const _ as *const u8,
-                    core::cmp::min(core::mem::size_of::<DeviceDescriptor>(), length as usize),
-                ) {
-                    core::ptr::write_volatile(fifo, *i);
+                let slice = get_descriptor(descriptor);
+                if let Some(to_send) = slice {
+                    let fifo = &usb.fifo0 as *const _ as *mut u8;
+                    for i in &to_send[0..core::cmp::min(length as usize, to_send.len())] {
+                        core::ptr::write_volatile(fifo, *i);
+                    }
+                    usb.csrl0.modify(|_r, w| {
+                        w.dataend().set_bit();
+                        w.txrdy().set_bit()
+                    });
+                } else {
+                    // we don't have this descriptor, so fail the request
+                    writeln!(uart, "no descriptor for type {:x?}", descriptor).unwrap();
+                    usb.csrl0.modify(|_r, w| w.stall().set_bit());
                 }
-                usb.csrl0.modify(|_r, w| {
-                    w.dataend().set_bit();
-                    w.txrdy().set_bit()
-                });
-            }
-            // Get Descriptor, type 6 = Device_Qualifier
-            (0x80, 6, 0x0600, 0, _length) => {
-                usb.csrl0.modify(|_r, w| w.rxrdyc().set_bit());
-                // we don't have any high-speed capabilities, so fail the request
-                usb.csrl0.modify(|_r, w| w.stall().set_bit());
             }
             (0x0, 5, addr, 0, 0) => {
                 // I think setting DATAEND is going to make the hardware send a zero-byte DATA1
@@ -238,6 +236,18 @@ unsafe fn do_endpoint_0(usb: &tm4c123x::usb0::RegisterBlock, uart: &mut Uart) {
         // hardware finally does respond to our STALL request.
         usb.csrl0.modify(|_r, w| w.stalled().clear_bit());
     }
+}
+
+unsafe fn get_descriptor(id: u16) -> Option<&'static [u8]> {
+    match id {
+        // device descriptor
+        0x0100 => Some(make_slice_of(&DEVICE)),
+        _ => None,
+    }
+}
+
+unsafe fn make_slice_of<'a, T>(object: &'a T) -> &'a [u8] {
+    core::slice::from_raw_parts(object as *const _ as *const u8, core::mem::size_of::<T>())
 }
 
 #[no_mangle]
