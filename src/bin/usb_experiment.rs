@@ -72,7 +72,67 @@ static DEVICE: DeviceDescriptor = DeviceDescriptor {
     iManufacturer: 0,
     iProduct: 0,
     iSerialNumber: 0,
-    bNumConfigurations: 0,
+    bNumConfigurations: 1,
+};
+
+#[repr(C)]
+#[repr(packed(1))]
+#[allow(non_snake_case)]
+struct ConfigDescriptor {
+    bLength: u8,
+    bDescriptorType: u8,
+    wTotalLength: u16,
+    bNumInterfaces: u8,
+    bConfigurationValue: u8,
+    iConfiguration: u8,
+    bmAttributes: u8,
+    bMaxPower: u8,
+}
+
+#[repr(C)]
+#[repr(packed(1))]
+#[allow(non_snake_case)]
+struct InterfaceDescriptor {
+    bLength: u8,
+    bDescriptorType: u8,
+    bInterfaceNumber: u8,
+    bAlternateSetting: u8,
+    bNumEndpoints: u8,
+    bInterfaceClass: u8,
+    bInterfaceSubClass: u8,
+    bInterfaceProtocol: u8,
+    iInterface: u8,
+}
+
+#[repr(C)]
+#[repr(packed(1))]
+struct WholeConfigurationDescriptor {
+    configuration: ConfigDescriptor,
+    interface: InterfaceDescriptor,
+}
+
+static CONFIGURATION: WholeConfigurationDescriptor = WholeConfigurationDescriptor {
+    configuration: ConfigDescriptor {
+        bLength: core::mem::size_of::<ConfigDescriptor>() as u8,
+        bDescriptorType: 2, // constant from spec
+        wTotalLength: core::mem::size_of::<WholeConfigurationDescriptor>() as u16,
+        bNumInterfaces: 1,
+        bConfigurationValue: 1,
+        iConfiguration: 0,
+        bmAttributes: 0x40,
+        bMaxPower: 50, // 100mA
+    },
+    interface: InterfaceDescriptor {
+        bLength: core::mem::size_of::<InterfaceDescriptor>() as u8,
+        bDescriptorType: 4,
+        bInterfaceNumber: 0,
+        bAlternateSetting: 0,
+        bNumEndpoints: 0,
+        bInterfaceClass: 0xff,
+        bInterfaceSubClass: 0x69,
+        bInterfaceProtocol: 0,
+        iInterface: 0,
+    },
 };
 
 // ****************************************************************************
@@ -242,6 +302,7 @@ unsafe fn get_descriptor(id: u16) -> Option<&'static [u8]> {
     match id {
         // device descriptor
         0x0100 => Some(make_slice_of(&DEVICE)),
+        0x0200 => Some(make_slice_of(&CONFIGURATION)),
         _ => None,
     }
 }
