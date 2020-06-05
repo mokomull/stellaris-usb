@@ -11,6 +11,7 @@ stellaris-launchpad = { path = "../stellaris-launchpad" }
 cortex-m = "0.6"
 cortex-m-rt = "0.6"
 tm4c123x = { path = "../dslite2svd/crates/tm4c123x", features = [ "rt" ] }
+usb-device = "0.2"
 
 [profile.release]
 lto = true
