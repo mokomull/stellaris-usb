@@ -14,6 +14,7 @@ use stellaris_launchpad::cpu::serial;
 use stellaris_launchpad::cpu::time::Bps;
 use tm4c123x::interrupt;
 use tm4c123x::UART0;
+use usb_device::prelude::*;
 
 #[no_mangle]
 pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
@@ -34,6 +35,12 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
         board.core_peripherals.SYST,
         stellaris_launchpad::board::clocks(),
     );
+
+    let bus = stellaris_usb::USB::new(board.USB0);
+    let test_class = usb_device::test_class::TestClass::new(&bus);
+    let mut usb_dev = UsbDeviceBuilder::new(&bus, UsbVidPid(0x1337, 0xfeed))
+        .product("stellaris-usb testing")
+        .build();
 
     loop {
         delay.delay_ms(500u32);
