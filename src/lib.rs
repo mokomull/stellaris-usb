@@ -48,11 +48,73 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn enable(&mut self) {
-        unimplemented!()
+        // no-op?
     }
 
     fn reset(&self) {
-        unimplemented!()
+        let mut fifo_address = 64; // after the endpoint 0 fifo
+        for (i, m) in self.max_packet_size_out.iter().enumerate() {
+            let m = match m {
+                None => continue,
+                m => m,
+            };
+            let m = m.unwrap();
+            let (size_setting, fifo_size) = size_setting_from_requested_size(m);
+            self.device
+                .epidx
+                .write(|w| unsafe { w.epidx().bits(i as u8 + 1) });
+            self.device.rxfifosz.write(|w| {
+                w.dpb().clear_bit();
+                unsafe { w.size().bits(size_setting) }
+            });
+            self.device
+                .rxfifoadd
+                .write(|w| unsafe { w.addr().bits(fifo_address / 8) });
+            unsafe {
+                match i {
+                    0 => self.device.rxmaxp1.write(|w| w.maxload().bits(m.get())),
+                    1 => self.device.rxmaxp2.write(|w| w.maxload().bits(m.get())),
+                    2 => self.device.rxmaxp3.write(|w| w.maxload().bits(m.get())),
+                    3 => self.device.rxmaxp4.write(|w| w.maxload().bits(m.get())),
+                    4 => self.device.rxmaxp5.write(|w| w.maxload().bits(m.get())),
+                    5 => self.device.rxmaxp6.write(|w| w.maxload().bits(m.get())),
+                    6 => self.device.rxmaxp7.write(|w| w.maxload().bits(m.get())),
+                    _ => panic!("the endpoint array only has 7 elements"),
+                }
+            }
+            fifo_address += fifo_size;
+        }
+        for (i, m) in self.max_packet_size_in.iter().enumerate() {
+            let m = match m {
+                None => continue,
+                m => m,
+            };
+            let m = m.unwrap();
+            let (size_setting, fifo_size) = size_setting_from_requested_size(m);
+            self.device
+                .epidx
+                .write(|w| unsafe { w.epidx().bits(i as u8 + 1) });
+            self.device.txfifosz.write(|w| {
+                w.dpb().clear_bit();
+                unsafe { w.size().bits(size_setting) }
+            });
+            self.device
+                .txfifoadd
+                .write(|w| unsafe { w.addr().bits(fifo_address / 8) });
+            unsafe {
+                match i {
+                    0 => self.device.txmaxp1.write(|w| w.maxload().bits(m.get())),
+                    1 => self.device.txmaxp2.write(|w| w.maxload().bits(m.get())),
+                    2 => self.device.txmaxp3.write(|w| w.maxload().bits(m.get())),
+                    3 => self.device.txmaxp4.write(|w| w.maxload().bits(m.get())),
+                    4 => self.device.txmaxp5.write(|w| w.maxload().bits(m.get())),
+                    5 => self.device.txmaxp6.write(|w| w.maxload().bits(m.get())),
+                    6 => self.device.txmaxp7.write(|w| w.maxload().bits(m.get())),
+                    _ => panic!("the endpoint array only has 7 elements"),
+                }
+            }
+            fifo_address += fifo_size;
+        }
     }
 
     fn set_device_address(&self, addr: u8) {
@@ -97,4 +159,37 @@ impl USB {
         };
         usb_device::bus::UsbBusAllocator::new(this)
     }
+}
+
+fn size_setting_from_requested_size(requested: NonZeroU16) -> (u8, u16) {
+    let requested = requested.get();
+    if requested <= 8 {
+        return (0x0, 8);
+    }
+    if requested <= 16 {
+        return (0x1, 16);
+    }
+    if requested <= 32 {
+        return (0x2, 32);
+    }
+    if requested <= 64 {
+        return (0x3, 64);
+    }
+    if requested <= 128 {
+        return (0x4, 128);
+    }
+    if requested <= 256 {
+        return (0x5, 256);
+    }
+    if requested <= 512 {
+        return (0x6, 512);
+    }
+    if requested <= 1024 {
+        return (0x7, 1024);
+    }
+    if requested <= 2048 {
+        return (0x8, 2048);
+    }
+
+    panic!("the USB peripheral does not support packet sizes larger than 2048");
 }
