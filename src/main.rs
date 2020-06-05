@@ -36,7 +36,7 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
         stellaris_launchpad::board::clocks(),
     );
 
-    let bus = stellaris_usb::USB::new(board.USB0);
+    let bus = stellaris_usb::USB::new(board.USB0, &board.power_control);
     let mut test_class = usb_device::test_class::TestClass::new(&bus);
     let mut usb_dev = UsbDeviceBuilder::new(&bus, UsbVidPid(0x1337, 0xfeed))
         .product("stellaris-usb testing")

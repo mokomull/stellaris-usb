@@ -161,7 +161,14 @@ impl usb_device::bus::UsbBus for USB {
 }
 
 impl USB {
-    pub fn new(usb0: tm4c123x::USB0) -> usb_device::bus::UsbBusAllocator<USB> {
+    pub fn new(
+        usb0: tm4c123x::USB0,
+        power_control: &stellaris_launchpad::cpu::sysctl::PowerControl,
+    ) -> usb_device::bus::UsbBusAllocator<USB> {
+        use stellaris_launchpad::cpu::sysctl::{control_power, reset, Domain, PowerState, RunMode};
+        control_power(power_control, Domain::Usb, RunMode::Run, PowerState::On);
+        reset(power_control, Domain::Usb);
+
         let this = USB {
             device: usb0,
             max_packet_size_out: [None; 7],
