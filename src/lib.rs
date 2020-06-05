@@ -146,7 +146,17 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn poll(&self) -> PollResult {
-        unimplemented!()
+        let is = self.device.is.read();
+        if is.reset().bit() {
+            return PollResult::Reset;
+        }
+        if is.suspend().bit() {
+            return PollResult::Suspend;
+        }
+        if is.resume().bit() {
+            return PollResult::Resume;
+        }
+        PollResult::None
     }
 }
 
