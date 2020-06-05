@@ -37,15 +37,21 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
     );
 
     let bus = stellaris_usb::USB::new(board.USB0);
-    let test_class = usb_device::test_class::TestClass::new(&bus);
+    let mut test_class = usb_device::test_class::TestClass::new(&bus);
     let mut usb_dev = UsbDeviceBuilder::new(&bus, UsbVidPid(0x1337, 0xfeed))
         .product("stellaris-usb testing")
         .build();
 
+    let mut counter = 0;
     loop {
-        delay.delay_ms(500u32);
-        board.led_green.set_high().unwrap();
-        delay.delay_ms(500u32);
-        board.led_green.set_low().unwrap();
+        delay.delay_ms(1u32);
+        usb_dev.poll(&mut [&mut test_class]);
+        if counter == 0 {
+            board.led_green.set_high().unwrap();
+        } else if counter == 500 {
+            board.led_green.set_low().unwrap();
+        }
+        counter += 1;
+        counter %= 1000;
     }
 }
