@@ -4,7 +4,7 @@ use core::num::NonZeroU16;
 use stellaris_launchpad::cpu::gpio::gpiod::{GpioControl, PD4, PD5};
 use usb_device::bus::PollResult;
 use usb_device::endpoint::EndpointAddress;
-use usb_device::Result;
+use usb_device::{Result, UsbDirection, UsbError};
 
 pub struct USB {
     device: tm4c123x::USB0,
@@ -119,15 +119,163 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn set_device_address(&self, addr: u8) {
-        unimplemented!()
+        self.device.faddr.write(|w| unsafe { w.bits(addr) });
     }
 
     fn write(&self, ep: EndpointAddress, buf: &[u8]) -> Result<usize> {
-        unimplemented!()
+        if ep.direction() != UsbDirection::In {
+            return Err(UsbError::InvalidEndpoint);
+        }
+        if ep.index() != 0 && self.max_packet_size_in[ep.index() as usize - 1].is_none() {
+            // was not previously allocated
+            return Err(UsbError::InvalidEndpoint);
+        }
+        let (fifo_p, already_queued, maxp) = match ep.index() {
+            0 => (
+                &self.device.fifo0 as *const _ as *mut u8,
+                self.device.csrl0.read().txrdy().bit(),
+                64,
+            ),
+            1 => (
+                &self.device.fifo1 as *const _ as *mut u8,
+                self.device.txcsrl1.read().txrdy().bit(),
+                self.device.txmaxp1.read().bits(),
+            ),
+            2 => (
+                &self.device.fifo2 as *const _ as *mut u8,
+                self.device.txcsrl2.read().txrdy().bit(),
+                self.device.txmaxp2.read().bits(),
+            ),
+            3 => (
+                &self.device.fifo3 as *const _ as *mut u8,
+                self.device.txcsrl3.read().txrdy().bit(),
+                self.device.txmaxp3.read().bits(),
+            ),
+            4 => (
+                &self.device.fifo4 as *const _ as *mut u8,
+                self.device.txcsrl4.read().txrdy().bit(),
+                self.device.txmaxp4.read().bits(),
+            ),
+            5 => (
+                &self.device.fifo5 as *const _ as *mut u8,
+                self.device.txcsrl5.read().txrdy().bit(),
+                self.device.txmaxp5.read().bits(),
+            ),
+            6 => (
+                &self.device.fifo6 as *const _ as *mut u8,
+                self.device.txcsrl6.read().txrdy().bit(),
+                self.device.txmaxp6.read().bits(),
+            ),
+            7 => (
+                &self.device.fifo7 as *const _ as *mut u8,
+                self.device.txcsrl7.read().txrdy().bit(),
+                self.device.txmaxp7.read().bits(),
+            ),
+            _ => panic!("the device only has 7 IN endpoints"),
+        };
+        if buf.len() > maxp as usize {
+            return Err(UsbError::BufferOverflow);
+        }
+        if already_queued {
+            return Err(UsbError::WouldBlock);
+        }
+
+        for c in buf {
+            unsafe {
+                core::ptr::write_volatile(fifo_p, *c);
+            }
+        }
+
+        match ep.index() {
+            0 => self.device.csrl0.modify(|_r, w| w.txrdy().set_bit()),
+            1 => self.device.txcsrl1.modify(|_r, w| w.txrdy().set_bit()),
+            2 => self.device.txcsrl2.modify(|_r, w| w.txrdy().set_bit()),
+            3 => self.device.txcsrl3.modify(|_r, w| w.txrdy().set_bit()),
+            4 => self.device.txcsrl4.modify(|_r, w| w.txrdy().set_bit()),
+            5 => self.device.txcsrl5.modify(|_r, w| w.txrdy().set_bit()),
+            6 => self.device.txcsrl6.modify(|_r, w| w.txrdy().set_bit()),
+            7 => self.device.txcsrl7.modify(|_r, w| w.txrdy().set_bit()),
+            _ => panic!("we would've already panicked"),
+        };
+        Ok(buf.len())
     }
 
     fn read(&self, ep: EndpointAddress, buf: &mut [u8]) -> Result<usize> {
-        unimplemented!()
+        if ep.direction() != UsbDirection::Out {
+            return Err(UsbError::InvalidEndpoint);
+        }
+        if ep.index() != 0 && self.max_packet_size_out[ep.index() as usize - 1].is_none() {
+            // was not previously allocated
+            return Err(UsbError::InvalidEndpoint);
+        }
+        let (fifo_p, available, fifo_bytes) = match ep.index() {
+            0 => (
+                &self.device.fifo0 as *const _ as *mut u8,
+                self.device.csrl0.read().rxrdy().bit(),
+                self.device.count0.read().bits() as u16,
+            ),
+            1 => (
+                &self.device.fifo1 as *const _ as *mut u8,
+                self.device.rxcsrl1.read().rxrdy().bit(),
+                self.device.rxcount1.read().bits(),
+            ),
+            2 => (
+                &self.device.fifo2 as *const _ as *mut u8,
+                self.device.rxcsrl2.read().rxrdy().bit(),
+                self.device.rxcount1.read().bits(),
+            ),
+            3 => (
+                &self.device.fifo3 as *const _ as *mut u8,
+                self.device.rxcsrl3.read().rxrdy().bit(),
+                self.device.rxcount3.read().bits(),
+            ),
+            4 => (
+                &self.device.fifo4 as *const _ as *mut u8,
+                self.device.rxcsrl4.read().rxrdy().bit(),
+                self.device.rxcount4.read().bits(),
+            ),
+            5 => (
+                &self.device.fifo5 as *const _ as *mut u8,
+                self.device.rxcsrl5.read().rxrdy().bit(),
+                self.device.rxcount5.read().bits(),
+            ),
+            6 => (
+                &self.device.fifo6 as *const _ as *mut u8,
+                self.device.rxcsrl6.read().rxrdy().bit(),
+                self.device.rxcount6.read().bits(),
+            ),
+            7 => (
+                &self.device.fifo7 as *const _ as *mut u8,
+                self.device.rxcsrl7.read().rxrdy().bit(),
+                self.device.rxcount7.read().bits(),
+            ),
+            _ => panic!("the device only has 7 IN endpoints"),
+        };
+        if buf.len() < fifo_bytes as usize {
+            return Err(UsbError::BufferOverflow);
+        }
+        if !available {
+            return Err(UsbError::WouldBlock);
+        }
+
+        for i in 0..fifo_bytes {
+            unsafe {
+                buf[i as usize] = core::ptr::read_volatile(fifo_p);
+            }
+        }
+
+        match ep.index() {
+            0 => self.device.csrl0.modify(|_r, w| w.rxrdyc().set_bit()),
+            1 => self.device.rxcsrl1.modify(|_r, w| w.rxrdy().clear_bit()),
+            2 => self.device.rxcsrl2.modify(|_r, w| w.rxrdy().clear_bit()),
+            3 => self.device.rxcsrl3.modify(|_r, w| w.rxrdy().clear_bit()),
+            4 => self.device.rxcsrl4.modify(|_r, w| w.rxrdy().clear_bit()),
+            5 => self.device.rxcsrl5.modify(|_r, w| w.rxrdy().clear_bit()),
+            6 => self.device.rxcsrl6.modify(|_r, w| w.rxrdy().clear_bit()),
+            7 => self.device.rxcsrl7.modify(|_r, w| w.rxrdy().clear_bit()),
+            _ => panic!("we would've already panicked"),
+        };
+        Ok(buf.len())
     }
 
     fn set_stalled(&self, ep: EndpointAddress, stalled: bool) {
