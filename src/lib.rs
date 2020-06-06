@@ -1,6 +1,7 @@
 #![no_std]
 
 use core::num::NonZeroU16;
+use stellaris_launchpad::cpu::gpio::gpiod::{GpioControl, PD4, PD5};
 use usb_device::bus::PollResult;
 use usb_device::endpoint::EndpointAddress;
 use usb_device::Result;
@@ -48,7 +49,7 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn enable(&mut self) {
-        // no-op?
+        self.device.power.modify(|_r, w| w.softconn().set_bit());
     }
 
     fn reset(&self) {
@@ -161,13 +162,30 @@ impl usb_device::bus::UsbBus for USB {
 }
 
 impl USB {
-    pub fn new(
+    pub fn new<ModeM, ModeP>(
         usb0: tm4c123x::USB0,
+        dminus: PD4<ModeM>,
+        dplus: PD5<ModeP>,
+        gpio_control: &mut GpioControl,
         power_control: &stellaris_launchpad::cpu::sysctl::PowerControl,
     ) -> usb_device::bus::UsbBusAllocator<USB> {
         use stellaris_launchpad::cpu::sysctl::{control_power, reset, Domain, PowerState, RunMode};
         control_power(power_control, Domain::Usb, RunMode::Run, PowerState::On);
         reset(power_control, Domain::Usb);
+
+        unsafe {
+            // since I hold a reference to PowerControl, this should not clobber anything
+            let sysctl = &*tm4c123x::SYSCTL::ptr();
+            sysctl.rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
+
+            // since I hold a unique reference to gpiod::GpioControl, this should also not stomp on anything
+            let portd = &*tm4c123x::GPIO_PORTD::ptr();
+            portd.amsel.modify(|r, w| {
+                w.bits(
+                    r.bits() | 0x30, /* bits 4 and 5 correspond to pin D4 and D5 */
+                )
+            });
+        }
 
         let this = USB {
             device: usb0,
