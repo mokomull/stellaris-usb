@@ -279,11 +279,45 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn set_stalled(&self, ep: EndpointAddress, stalled: bool) {
-        unimplemented!()
+        match (ep.direction(), ep.index()) {
+            (_, 0) => self.device.csrl0.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 1) => self.device.txcsrl1.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 2) => self.device.txcsrl2.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 3) => self.device.txcsrl3.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 4) => self.device.txcsrl4.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 5) => self.device.txcsrl5.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 6) => self.device.txcsrl6.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::In, 7) => self.device.txcsrl7.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 1) => self.device.rxcsrl1.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 2) => self.device.rxcsrl2.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 3) => self.device.rxcsrl3.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 4) => self.device.rxcsrl4.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 5) => self.device.rxcsrl5.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 6) => self.device.rxcsrl6.modify(|_r, w| w.stall().bit(stalled)),
+            (UsbDirection::Out, 7) => self.device.rxcsrl7.modify(|_r, w| w.stall().bit(stalled)),
+            (_, _) => panic!("set_stalled: invalid endpoint for hardware: {:?}", ep),
+        }
     }
 
     fn is_stalled(&self, ep: EndpointAddress) -> bool {
-        unimplemented!()
+        match (ep.direction(), ep.index()) {
+            (_, 0) => self.device.csrl0.read().stall().bit(),
+            (UsbDirection::In, 1) => self.device.txcsrl1.read().stall().bit(),
+            (UsbDirection::In, 2) => self.device.txcsrl2.read().stall().bit(),
+            (UsbDirection::In, 3) => self.device.txcsrl3.read().stall().bit(),
+            (UsbDirection::In, 4) => self.device.txcsrl4.read().stall().bit(),
+            (UsbDirection::In, 5) => self.device.txcsrl5.read().stall().bit(),
+            (UsbDirection::In, 6) => self.device.txcsrl6.read().stall().bit(),
+            (UsbDirection::In, 7) => self.device.txcsrl7.read().stall().bit(),
+            (UsbDirection::Out, 1) => self.device.rxcsrl1.read().stall().bit(),
+            (UsbDirection::Out, 2) => self.device.rxcsrl2.read().stall().bit(),
+            (UsbDirection::Out, 3) => self.device.rxcsrl3.read().stall().bit(),
+            (UsbDirection::Out, 4) => self.device.rxcsrl4.read().stall().bit(),
+            (UsbDirection::Out, 5) => self.device.rxcsrl5.read().stall().bit(),
+            (UsbDirection::Out, 6) => self.device.rxcsrl6.read().stall().bit(),
+            (UsbDirection::Out, 7) => self.device.rxcsrl7.read().stall().bit(),
+            (_, _) => panic!("is_stalled: invalid endpoint for hardware: {:?}", ep),
+        }
     }
 
     fn suspend(&self) {
