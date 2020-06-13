@@ -321,11 +321,12 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn suspend(&self) {
-        unimplemented!()
+        // go ahead and stay in high-powered state, but it should really be the application that
+        // controls what happens here...
     }
 
     fn resume(&self) {
-        unimplemented!()
+        // since we did nothing in suspend, do nothing here either.
     }
 
     fn poll(&self) -> PollResult {
