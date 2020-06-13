@@ -12,6 +12,7 @@ pub struct USB {
     // index in this array will become Some when it is allocated.
     max_packet_size_out: [Option<NonZeroU16>; 7],
     max_packet_size_in: [Option<NonZeroU16>; 7],
+    rx_waiting: core::cell::RefCell<u16>,
 }
 
 unsafe impl Sync for USB {}
@@ -264,6 +265,9 @@ impl usb_device::bus::UsbBus for USB {
             }
         }
 
+        // clear the bit from the rx available bitmap
+        self.rx_waiting.replace_with(|&mut old| old & !(1 << ep.index()));
+
         match ep.index() {
             0 => self.device.csrl0.modify(|_r, w| w.rxrdyc().set_bit()),
             1 => self.device.rxcsrl1.modify(|_r, w| w.rxrdy().clear_bit()),
@@ -340,6 +344,30 @@ impl usb_device::bus::UsbBus for USB {
         if is.resume().bit() {
             return PollResult::Resume;
         }
+
+        let txis = self.device.txis.read().bits();
+        let rx_ready = self.device.rxis.read().bits();
+        self.rx_waiting.replace_with(|&mut old| old | rx_ready);
+
+        // and now the special junk for ep0
+        let csrl0 = self.device.csrl0.read();
+        let setup_ep0 = csrl0.setend().bit() && csrl0.rxrdy().bit();
+        let rx_ep0 = csrl0.rxrdy().bit();
+        if rx_ep0 {
+            self.rx_waiting.replace_with(|&mut old| old | 0x01);
+        }
+
+        let ep_in_complete = txis & !0x01; // because ep0 is handled separately
+        let ep_out = *self.rx_waiting.borrow();
+        let ep_setup = if setup_ep0 { 0x01 } else { 0x00 };
+        if ep_in_complete | ep_out | ep_setup != 0x00 {
+            return PollResult::Data {
+                ep_in_complete,
+                ep_out,
+                ep_setup,
+            };
+        }
+
         PollResult::None
     }
 }
@@ -374,6 +402,7 @@ impl USB {
             device: usb0,
             max_packet_size_out: [None; 7],
             max_packet_size_in: [None; 7],
+            rx_waiting: core::cell::RefCell::new(0),
         };
         usb_device::bus::UsbBusAllocator::new(this)
     }
