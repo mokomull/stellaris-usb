@@ -4,7 +4,7 @@ use core::fmt::Write;
 use core::num::NonZeroU16;
 use stellaris_launchpad::cpu::gpio::gpiod::{GpioControl, PD4, PD5};
 use usb_device::bus::PollResult;
-use usb_device::endpoint::EndpointAddress;
+use usb_device::endpoint::{EndpointAddress, EndpointType};
 use usb_device::{Result, UsbDirection, UsbError};
 
 pub struct USB<T: core::fmt::Write> {
@@ -24,7 +24,7 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
         &mut self,
         ep_dir: usb_device::UsbDirection,
         ep_addr: Option<EndpointAddress>,
-        _ep_type: usb_device::endpoint::EndpointType,
+        ep_type: EndpointType,
         max_packet_size: u16,
         _interval: u8,
     ) -> usb_device::Result<EndpointAddress> {
@@ -33,11 +33,19 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
             "alloc_ep: {:?}, {:?}, {:?}, {:?}, {:?}",
             ep_dir,
             ep_addr,
-            _ep_type,
+            ep_type,
             max_packet_size,
             _interval,
         )
         .unwrap();
+
+        if let Some(requested) = ep_addr {
+            if requested.index() == 0 && ep_type == EndpointType::Control {
+                // Control pipe on endpoint 0 is always present
+                return Ok(EndpointAddress::from_parts(requested.index(), ep_dir));
+            }
+        }
+
         let endpoints = match ep_dir {
             usb_device::UsbDirection::In => &mut self.max_packet_size_in,
             usb_device::UsbDirection::Out => &mut self.max_packet_size_out,
