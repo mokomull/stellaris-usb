@@ -1,23 +1,25 @@
 #![no_std]
 
+use core::fmt::Write;
 use core::num::NonZeroU16;
 use stellaris_launchpad::cpu::gpio::gpiod::{GpioControl, PD4, PD5};
 use usb_device::bus::PollResult;
 use usb_device::endpoint::EndpointAddress;
 use usb_device::{Result, UsbDirection, UsbError};
 
-pub struct USB {
+pub struct USB<T: core::fmt::Write> {
     device: tm4c123x::USB0,
     // the device has 7 RX and 7 TX endpoints, each numbered 1-7.  The corresponding (endpoint-1)th
     // index in this array will become Some when it is allocated.
     max_packet_size_out: [Option<NonZeroU16>; 7],
     max_packet_size_in: [Option<NonZeroU16>; 7],
     rx_waiting: core::cell::RefCell<u16>,
+    uart: core::cell::RefCell<T>,
 }
 
-unsafe impl Sync for USB {}
+unsafe impl<T: Write> Sync for USB<T> {}
 
-impl usb_device::bus::UsbBus for USB {
+impl<T: Write> usb_device::bus::UsbBus for USB<T> {
     fn alloc_ep(
         &mut self,
         ep_dir: usb_device::UsbDirection,
@@ -266,7 +268,8 @@ impl usb_device::bus::UsbBus for USB {
         }
 
         // clear the bit from the rx available bitmap
-        self.rx_waiting.replace_with(|&mut old| old & !(1 << ep.index()));
+        self.rx_waiting
+            .replace_with(|&mut old| old & !(1 << ep.index()));
 
         match ep.index() {
             0 => self.device.csrl0.modify(|_r, w| w.rxrdyc().set_bit()),
@@ -334,6 +337,67 @@ impl usb_device::bus::UsbBus for USB {
     }
 
     fn poll(&self) -> PollResult {
+        let res = self.do_poll();
+        let mut uart = self.uart.borrow_mut();
+        write!(uart, "poll: ").unwrap();
+        match res {
+            PollResult::None => writeln!(uart, "None"),
+            PollResult::Reset => writeln!(uart, "Reset"),
+            PollResult::Suspend => writeln!(uart, "Suspend"),
+            PollResult::Resume => writeln!(uart, "Resume"),
+            PollResult::Data {
+                ep_out,
+                ep_in_complete,
+                ep_setup,
+            } => writeln!(
+                uart,
+                "Data {{ setup: {:02x}, tx_complete: {:02x}, rx: {:02x} }}",
+                ep_setup, ep_in_complete, ep_out
+            ),
+        }
+        .unwrap();
+        return res;
+    }
+}
+
+impl<T: Write> USB<T> {
+    pub fn new<ModeM, ModeP>(
+        usb0: tm4c123x::USB0,
+        dminus: PD4<ModeM>,
+        dplus: PD5<ModeP>,
+        gpio_control: &mut GpioControl,
+        power_control: &stellaris_launchpad::cpu::sysctl::PowerControl,
+        uart: T,
+    ) -> usb_device::bus::UsbBusAllocator<USB<T>> {
+        use stellaris_launchpad::cpu::sysctl::{control_power, reset, Domain, PowerState, RunMode};
+        control_power(power_control, Domain::Usb, RunMode::Run, PowerState::On);
+        reset(power_control, Domain::Usb);
+
+        unsafe {
+            // since I hold a reference to PowerControl, this should not clobber anything
+            let sysctl = &*tm4c123x::SYSCTL::ptr();
+            sysctl.rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
+
+            // since I hold a unique reference to gpiod::GpioControl, this should also not stomp on anything
+            let portd = &*tm4c123x::GPIO_PORTD::ptr();
+            portd.amsel.modify(|r, w| {
+                w.bits(
+                    r.bits() | 0x30, /* bits 4 and 5 correspond to pin D4 and D5 */
+                )
+            });
+        }
+
+        let this = USB {
+            device: usb0,
+            max_packet_size_out: [None; 7],
+            max_packet_size_in: [None; 7],
+            rx_waiting: core::cell::RefCell::new(0),
+            uart: core::cell::RefCell::new(uart),
+        };
+        usb_device::bus::UsbBusAllocator::new(this)
+    }
+
+    fn do_poll(&self) -> PollResult {
         let is = self.device.is.read();
         if is.reset().bit() {
             return PollResult::Reset;
@@ -369,42 +433,6 @@ impl usb_device::bus::UsbBus for USB {
         }
 
         PollResult::None
-    }
-}
-
-impl USB {
-    pub fn new<ModeM, ModeP>(
-        usb0: tm4c123x::USB0,
-        dminus: PD4<ModeM>,
-        dplus: PD5<ModeP>,
-        gpio_control: &mut GpioControl,
-        power_control: &stellaris_launchpad::cpu::sysctl::PowerControl,
-    ) -> usb_device::bus::UsbBusAllocator<USB> {
-        use stellaris_launchpad::cpu::sysctl::{control_power, reset, Domain, PowerState, RunMode};
-        control_power(power_control, Domain::Usb, RunMode::Run, PowerState::On);
-        reset(power_control, Domain::Usb);
-
-        unsafe {
-            // since I hold a reference to PowerControl, this should not clobber anything
-            let sysctl = &*tm4c123x::SYSCTL::ptr();
-            sysctl.rcc2.modify(|_r, w| w.usbpwrdn().clear_bit());
-
-            // since I hold a unique reference to gpiod::GpioControl, this should also not stomp on anything
-            let portd = &*tm4c123x::GPIO_PORTD::ptr();
-            portd.amsel.modify(|r, w| {
-                w.bits(
-                    r.bits() | 0x30, /* bits 4 and 5 correspond to pin D4 and D5 */
-                )
-            });
-        }
-
-        let this = USB {
-            device: usb0,
-            max_packet_size_out: [None; 7],
-            max_packet_size_in: [None; 7],
-            rx_waiting: core::cell::RefCell::new(0),
-        };
-        usb_device::bus::UsbBusAllocator::new(this)
     }
 }
 

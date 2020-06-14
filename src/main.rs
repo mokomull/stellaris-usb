@@ -44,6 +44,7 @@ pub fn stellaris_main(mut board: stellaris_launchpad::board::Board) {
         pins_d.pd5,
         &mut pins_d.control,
         &board.power_control,
+        uart,
     );
     let mut test_class = usb_device::test_class::TestClass::new(&bus);
     let mut usb_dev = UsbDeviceBuilder::new(&bus, UsbVidPid(0x1337, 0xfeed))
