@@ -356,29 +356,27 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
 
     fn poll(&self) -> PollResult {
         let res = self.do_poll();
-        // let mut uart = self.uart.borrow_mut();
-        // write!(uart, "poll: ").unwrap();
-        // match res {
-        //     PollResult::None => writeln!(uart, "None"),
-        //     PollResult::Reset => writeln!(uart, "Reset"),
-        //     PollResult::Suspend => writeln!(uart, "Suspend"),
-        //     PollResult::Resume => writeln!(uart, "Resume"),
-        //     PollResult::Data {
-        //         ep_out,
-        //         ep_in_complete,
-        //         ep_setup,
-        //     } => {
-        //         if ep_setup & 0x01 != 0 {
-        //             cortex_m::asm::bkpt();
-        //         }
-        //         writeln!(
-        //             uart,
-        //             "Data {{ setup: {:02x}, tx_complete: {:02x}, rx: {:02x} }}",
-        //             ep_setup, ep_in_complete, ep_out
-        //         )
-        //     }
-        // }
-        // .unwrap();
+        let mut uart = self.uart.borrow_mut();
+        write!(uart, "poll: ").unwrap();
+        match res {
+            PollResult::None => writeln!(uart, "None"),
+            PollResult::Reset => writeln!(uart, "Reset"),
+            PollResult::Suspend => writeln!(uart, "Suspend"),
+            PollResult::Resume => writeln!(uart, "Resume"),
+            PollResult::Data {
+                ep_out,
+                ep_in_complete,
+                ep_setup,
+            } => {
+                cortex_m::asm::bkpt();
+                writeln!(
+                    uart,
+                    "Data {{ setup: {:02x}, tx_complete: {:02x}, rx: {:02x} }}",
+                    ep_setup, ep_in_complete, ep_out
+                )
+            }
+        }
+        .unwrap();
         return res;
     }
 }
