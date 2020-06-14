@@ -1,5 +1,6 @@
 #![no_std]
 
+use core::cmp::min;
 use core::fmt::Write;
 use core::num::NonZeroU16;
 use stellaris_launchpad::cpu::gpio::gpiod::{GpioControl, PD4, PD5};
@@ -272,17 +273,18 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
             ),
             _ => panic!("the device only has 7 IN endpoints"),
         };
-        if buf.len() < fifo_bytes as usize {
-            return Err(UsbError::BufferOverflow);
-        }
         if !available {
             return Err(UsbError::WouldBlock);
         }
 
-        for i in 0..fifo_bytes {
+        for i in 0..min(buf.len(), fifo_bytes as usize) {
             unsafe {
                 buf[i as usize] = core::ptr::read_volatile(fifo_p);
             }
+        }
+        // eat the remaining bytes out of the FIFO into nothingness
+        for _ in buf.len()..(fifo_bytes as usize) {
+            let _ = unsafe { core::ptr::read_volatile(fifo_p) };
         }
 
         // clear the bit from the rx available bitmap
@@ -300,7 +302,7 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
             7 => self.device.rxcsrl7.modify(|_r, w| w.rxrdy().clear_bit()),
             _ => panic!("we would've already panicked"),
         };
-        Ok(buf.len())
+        Ok(fifo_bytes as usize)
     }
 
     fn set_stalled(&self, ep: EndpointAddress, stalled: bool) {
