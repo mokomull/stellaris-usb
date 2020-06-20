@@ -10,11 +10,13 @@ use usb_device::{Result, UsbDirection, UsbError};
 
 pub struct USB<T: core::fmt::Write> {
     device: tm4c123x::USB0,
-    // the device has 7 RX and 7 TX endpoints, each numbered 1-7.  The corresponding (endpoint-1)th
-    // index in this array will become Some when it is allocated.
-    max_packet_size_out: [Option<NonZeroU16>; 7],
-    max_packet_size_in: [Option<NonZeroU16>; 7],
+    // the device has 7 RX and 7 TX endpoints, each numbered 1-7, plus some real wacko special
+    // handling for endpoint 0.  The corresponding (endpoint)th index in this array will become Some
+    // when it is allocated.
+    max_packet_size_out: [Option<NonZeroU16>; 8],
+    max_packet_size_in: [Option<NonZeroU16>; 8],
     rx_waiting: core::cell::RefCell<u16>,
+    ep0: core::cell::RefCell<Endpoint0>,
     uart: core::cell::RefCell<T>,
 }
 
@@ -40,26 +42,36 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
         )
         .unwrap();
 
-        if let Some(requested) = ep_addr {
-            if requested.index() == 0 && ep_type == EndpointType::Control {
-                // Control pipe on endpoint 0 is always present
-                return Ok(EndpointAddress::from_parts(requested.index(), ep_dir));
+        let (endpoints, other_dir_endpoints) = match ep_dir {
+            usb_device::UsbDirection::In => {
+                (&mut self.max_packet_size_in, &self.max_packet_size_out)
             }
-        }
-
-        let endpoints = match ep_dir {
-            usb_device::UsbDirection::In => &mut self.max_packet_size_in,
-            usb_device::UsbDirection::Out => &mut self.max_packet_size_out,
+            usb_device::UsbDirection::Out => {
+                (&mut self.max_packet_size_out, &self.max_packet_size_in)
+            }
         };
         let chosen_endpoint = match ep_addr {
             // if a particular endpoint number was requested AND it is currently available
-            Some(requested)
-                if requested.index() > 0 && endpoints[requested.index() - 1].is_none() =>
-            {
-                requested.index() - 1
+            Some(requested) if endpoints[requested.index()].is_none() => {
+                // Control pipe on endpoint 0 is always present, but make sure the max packet size
+                // matches for in and out
+                if requested.index() == 0 {
+                    if let Some(other_max_packet_size) = other_dir_endpoints[0] {
+                        if max_packet_size != other_max_packet_size.get() {
+                            return Err(UsbError::InvalidEndpoint);
+                        }
+                    }
+                }
+
+                requested.index()
             }
             // otherwise, look for a None anywhere in the array and use its index.
-            _ => match endpoints.iter().enumerate().find(|&(_i, v)| v.is_none()) {
+            _ => match endpoints
+                .iter()
+                .enumerate()
+                .skip(1) // endpoint 0 is not available for consideration
+                .find(|&(_i, v)| v.is_none())
+            {
                 Some((i, _)) => i,
                 _ => return Err(usb_device::UsbError::EndpointOverflow),
             },
@@ -67,7 +79,7 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
         endpoints[chosen_endpoint] =
             Some(unsafe { NonZeroU16::new_unchecked(core::cmp::max(1, max_packet_size)) });
 
-        Ok(EndpointAddress::from_parts(chosen_endpoint + 1, ep_dir))
+        Ok(EndpointAddress::from_parts(chosen_endpoint, ep_dir))
     }
 
     fn enable(&mut self) {
@@ -148,16 +160,18 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
         if ep.direction() != UsbDirection::In {
             return Err(UsbError::InvalidEndpoint);
         }
-        if ep.index() != 0 && self.max_packet_size_in[ep.index() as usize - 1].is_none() {
+        if self.max_packet_size_in[ep.index()].is_none() {
             // was not previously allocated
             return Err(UsbError::InvalidEndpoint);
         }
         let (fifo_p, already_queued, maxp) = match ep.index() {
-            0 => (
-                &self.device.fifo0 as *const _ as *mut u8,
-                self.device.csrl0.read().txrdy().bit(),
-                64,
-            ),
+            0 => {
+                return self.ep0.borrow_mut().write(
+                    &self.device,
+                    self.max_packet_size_in[0].unwrap().get(),
+                    buf,
+                )
+            }
             1 => (
                 &self.device.fifo1 as *const _ as *mut u8,
                 self.device.txcsrl1.read().txrdy().bit(),
@@ -209,7 +223,6 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
         }
 
         match ep.index() {
-            0 => self.device.csrl0.modify(|_r, w| w.txrdy().set_bit()),
             1 => self.device.txcsrl1.modify(|_r, w| w.txrdy().set_bit()),
             2 => self.device.txcsrl2.modify(|_r, w| w.txrdy().set_bit()),
             3 => self.device.txcsrl3.modify(|_r, w| w.txrdy().set_bit()),
@@ -226,16 +239,23 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
         if ep.direction() != UsbDirection::Out {
             return Err(UsbError::InvalidEndpoint);
         }
-        if ep.index() != 0 && self.max_packet_size_out[ep.index() as usize - 1].is_none() {
+        if self.max_packet_size_out[ep.index()].is_none() {
             // was not previously allocated
             return Err(UsbError::InvalidEndpoint);
         }
         let (fifo_p, available, fifo_bytes) = match ep.index() {
-            0 => (
-                &self.device.fifo0 as *const _ as *mut u8,
-                self.device.csrl0.read().rxrdy().bit(),
-                self.device.count0.read().bits() as u16,
-            ),
+            0 => {
+                let ret = self.ep0.borrow_mut().read(
+                    &self.device,
+                    self.max_packet_size_out[0].unwrap().get(),
+                    buf,
+                );
+                if ret.is_ok() {
+                    self.rx_waiting.replace_with(|&mut old| old & !0x01);
+                    self.device.csrl0.modify(|_r, w| w.rxrdyc().set_bit());
+                }
+                return ret;
+            }
             1 => (
                 &self.device.fifo1 as *const _ as *mut u8,
                 self.device.rxcsrl1.read().rxrdy().bit(),
@@ -292,7 +312,6 @@ impl<T: Write> usb_device::bus::UsbBus for USB<T> {
             .replace_with(|&mut old| old & !(1 << ep.index()));
 
         match ep.index() {
-            0 => self.device.csrl0.modify(|_r, w| w.rxrdyc().set_bit()),
             1 => self.device.rxcsrl1.modify(|_r, w| w.rxrdy().clear_bit()),
             2 => self.device.rxcsrl2.modify(|_r, w| w.rxrdy().clear_bit()),
             3 => self.device.rxcsrl3.modify(|_r, w| w.rxrdy().clear_bit()),
@@ -412,9 +431,10 @@ impl<T: Write> USB<T> {
 
         let this = USB {
             device: usb0,
-            max_packet_size_out: [None; 7],
-            max_packet_size_in: [None; 7],
+            max_packet_size_out: [None; 8],
+            max_packet_size_in: [None; 8],
             rx_waiting: core::cell::RefCell::new(0),
+            ep0: core::cell::RefCell::new(Endpoint0::new()),
             uart: core::cell::RefCell::new(uart),
         };
         usb_device::bus::UsbBusAllocator::new(this)
@@ -434,24 +454,26 @@ impl<T: Write> USB<T> {
 
         let txis = self.device.txis.read().bits();
         let rx_ready = self.device.rxis.read().bits();
-        self.rx_waiting.replace_with(|&mut old| old | rx_ready);
 
         // and now the special junk for ep0
-        let csrl0 = self.device.csrl0.read();
-        let setup_ep0 = csrl0.setend().bit() && csrl0.rxrdy().bit();
-        let rx_ep0 = csrl0.rxrdy().bit();
-        if rx_ep0 {
-            self.rx_waiting.replace_with(|&mut old| old | 0x01);
-        }
+        let ep0_packet = self.ep0.borrow_mut().check(&self.device);
+        let (ep0_in_complete, ep0_out, ep0_setup) = match ep0_packet {
+            ControlPacket::InComplete => (1, 0, 0),
+            ControlPacket::Setup => (0, 1, 1),
+            ControlPacket::Out => (0, 1, 0),
+            ControlPacket::None => (0, 0, 0),
+        };
 
-        let ep_in_complete = txis & !0x01; // because ep0 is handled separately
+        self.rx_waiting
+            .replace_with(|&mut old| old | rx_ready | ep0_out);
+
+        let ep_in_complete = txis & !0x01 | ep0_in_complete; // because ep0 is handled separately
         let ep_out = *self.rx_waiting.borrow();
-        let ep_setup = if setup_ep0 { 0x01 } else { 0x00 };
-        if ep_in_complete | ep_out | ep_setup != 0x00 {
+        if ep_in_complete | ep_out | ep0_setup != 0x00 {
             return PollResult::Data {
                 ep_in_complete,
                 ep_out,
-                ep_setup,
+                ep_setup: ep0_setup,
             };
         }
 
@@ -490,4 +512,216 @@ fn size_setting_from_requested_size(requested: NonZeroU16) -> (u8, u16) {
     }
 
     panic!("the USB peripheral does not support packet sizes larger than 2048");
+}
+
+unsafe fn read_fifo(fifo: *mut u8, buf: &mut [u8]) {
+    for i in 0..buf.len() {
+        buf[i] = core::ptr::read_volatile(fifo);
+    }
+}
+
+unsafe fn write_fifo(fifo: *mut u8, buf: &[u8]) {
+    for &byte in buf {
+        core::ptr::write_volatile(fifo, byte);
+    }
+}
+
+unsafe fn eat_fifo(fifo: *mut u8, bytes: usize) {
+    for _ in 0..bytes {
+        core::ptr::read_volatile(fifo);
+    }
+}
+
+// Reverse-engineer the packets that must have been sent based on the hardware's implicit handling
+// of control transfers
+#[derive(Debug)]
+enum ControlStage {
+    Idle,
+    Setup,
+    DataOut,
+    DataIn,
+    DataInWaiting { last_packet: bool },
+    StatusForOut,
+    StatusForIn,
+    FabricateStatusOut,
+}
+
+enum ControlPacket {
+    None,
+    Setup,
+    Out,
+    InComplete,
+}
+
+struct Endpoint0 {
+    stage: ControlStage,
+}
+
+impl Endpoint0 {
+    fn new() -> Self {
+        Endpoint0 {
+            stage: ControlStage::Idle,
+        }
+    }
+
+    fn check(&mut self, device: &tm4c123x::USB0) -> ControlPacket {
+        let csrl0 = device.csrl0.read();
+
+        // SETEND means the device got an unexpected setup packet, so start everything over
+        if csrl0.setend().bit() {
+            self.stage = ControlStage::Idle;
+            device.csrl0.modify(|_r, w| w.setendc().set_bit());
+        }
+
+        match self.stage {
+            ControlStage::Idle => {
+                if csrl0.rxrdy().bit() {
+                    self.stage = ControlStage::Setup;
+                    return ControlPacket::Setup;
+                }
+            }
+            // if we're still in "Setup" then the device has not yet read the command from the endpoint
+            ControlStage::Setup => return ControlPacket::Setup,
+            ControlStage::DataOut => {
+                if csrl0.rxrdy().bit() {
+                    return ControlPacket::Out;
+                }
+            }
+            ControlStage::DataIn => {
+                // really nothing to do here, if we're waiting on more packets to send
+            }
+            ControlStage::DataInWaiting { last_packet } => {
+                if !csrl0.txrdy().bit() {
+                    if last_packet {
+                        self.stage = ControlStage::StatusForIn;
+                    } else {
+                        self.stage = ControlStage::DataIn;
+                    }
+                    return ControlPacket::InComplete;
+                }
+            }
+            ControlStage::StatusForOut => {
+                if !csrl0.dataend().bit() {
+                    self.stage = ControlStage::Idle;
+                    return ControlPacket::InComplete;
+                }
+            }
+            ControlStage::StatusForIn => {
+                if !csrl0.dataend().bit() {
+                    self.stage = ControlStage::FabricateStatusOut;
+                    return ControlPacket::Out;
+                }
+            }
+            ControlStage::FabricateStatusOut => {
+                // we've already finished the status stage if the hardware has cleared DATAEND, but
+                // the device hasn't yet read() the virtual packet.
+                return ControlPacket::Out;
+            }
+        };
+        ControlPacket::None
+    }
+
+    fn read(
+        &mut self,
+        device: &tm4c123x::USB0,
+        max_packet_size: u16,
+        target: &mut [u8],
+    ) -> Result<usize> {
+        let fifo = &device.fifo0 as *const _ as *mut u8;
+        let available = device.count0.read().bits() as usize;
+        if available <= 0 {
+            return Err(UsbError::WouldBlock);
+        }
+        match &self.stage {
+            ControlStage::Idle => panic!("read() called but we're not in a control transfer"),
+            ControlStage::Setup => {
+                if available != 8 {
+                    // something bad happened in the state-machine; this wasn't a setup-stage packet
+                    // so let's reset everyting
+                    self.stage = ControlStage::Idle;
+                    device.csrh0.write(|w| w.flush().set_bit());
+                    return Ok(0);
+                }
+                let mut request = [0u8; 8];
+                unsafe { read_fifo(fifo, &mut request) };
+                // copied from usb_device::control::Request::parse() because that's only pub(crate)
+                let direction: UsbDirection = request[0].into();
+                self.stage = match direction {
+                    UsbDirection::Out => ControlStage::DataOut,
+                    UsbDirection::In => ControlStage::DataIn,
+                };
+                target[0..8].copy_from_slice(&request);
+                return Ok(8);
+            }
+            ControlStage::DataOut => {
+                let buffer_bytes = min(available, target.len());
+                unsafe { read_fifo(fifo, &mut target[..buffer_bytes]) };
+                if buffer_bytes < available {
+                    unsafe { eat_fifo(fifo, available - buffer_bytes) };
+                }
+                if available < max_packet_size as usize {
+                    // data stage is terminated by a short packet
+                    self.stage = ControlStage::StatusForOut;
+                    device.csrl0.modify(|_r, w| w.dataend().set_bit());
+                }
+                return Ok(available);
+            }
+            ControlStage::FabricateStatusOut => {
+                self.stage = ControlStage::Idle;
+                return Ok(0);
+            }
+            ControlStage::StatusForIn => {
+                panic!("read() called on StatusForIn before we signaled an OUT available")
+            }
+            x @ ControlStage::DataIn
+            | x @ ControlStage::DataInWaiting { .. }
+            | x @ ControlStage::StatusForOut => panic!(
+                "read() was called but we expect an IN transfer in stage {:?}",
+                x
+            ),
+        }
+    }
+
+    fn write(
+        &mut self,
+        device: &tm4c123x::USB0,
+        max_packet_size: u16,
+        source: &[u8],
+    ) -> Result<usize> {
+        let fifo = &device.fifo0 as *const _ as *mut u8;
+
+        if source.len() > max_packet_size as usize {
+            return Err(UsbError::BufferOverflow);
+        }
+        if device.csrl0.read().txrdy().bit() {
+            return Err(UsbError::WouldBlock);
+        }
+
+        match &self.stage {
+            ControlStage::DataIn => {
+                unsafe { write_fifo(fifo, source) };
+                device.csrl0.modify(|_r, w| w.txrdy().set_bit());
+                if source.len() == max_packet_size as usize {
+                    self.stage = ControlStage::DataInWaiting { last_packet: false };
+                } else {
+                    // a short packet means this is the end of the data stage
+                    device.csrl0.modify(|_r, w| w.dataend().set_bit());
+                    self.stage = ControlStage::DataInWaiting { last_packet: true };
+                }
+                return Ok(source.len());
+            }
+            ControlStage::DataOut => {
+                if source.len() != 0 {
+                    panic!("non-zero length packet should not be sent for status stage");
+                }
+                device.csrl0.modify(|_r, w| w.dataend().set_bit());
+                self.stage = ControlStage::StatusForOut;
+                return Ok(0);
+            }
+            _ => panic!(
+                "write() called outside of a data stage, but we're in {:?}",
+                self.stage
+            ),
+        }
+    }
 }
